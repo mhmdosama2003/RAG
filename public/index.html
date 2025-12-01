@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ask your docs (Vertex RAG + Gemini)</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0b0c10;
+        --card: #12151a;
+        --text: #e6edf3;
+        --muted: #9aa4b2;
+        --accent: #4f46e5;
+        --accent-2: #22c55e;
+        --border: #1f2937;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        background: linear-gradient(180deg, #0b0c10 0%, #0e1016 100%);
+        color: var(--text);
+      }
+      .container { max-width: 820px; margin: 40px auto; padding: 0 16px; }
+      header { display:flex; align-items:center; gap:12px; margin-bottom: 20px; }
+      .logo { width: 36px; height: 36px; border-radius: 8px; background: radial-gradient(circle at 30% 30%, #59f, #74f); }
+      h1 { font-size: 1.6rem; margin: 0; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+      .conversation { max-height: 400px; overflow-y: auto; margin-bottom: 16px; }
+      .message { margin-bottom: 16px; padding: 12px; border-radius: 8px; }
+      .message.user { background: var(--accent); color: white; margin-left: 20%; }
+      .message.assistant { background: #0f172a; border: 1px solid var(--border); margin-right: 20%; }
+      .message-header { font-size: 0.8rem; opacity: 0.7; margin-bottom: 4px; }
+      .message-content { white-space: pre-wrap; line-height: 1.6; }
+      label { display:block; margin-bottom: 8px; color: var(--muted); }
+      textarea { width: 100%; min-height: 100px; resize: vertical; padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: #0f1218; color: var(--text); font-size: 1rem; }
+      .row { display:flex; gap: 12px; align-items:center; margin-top: 12px; }
+      button { background: var(--accent); border: none; color: white; padding: 10px 16px; border-radius: 10px; font-weight: 600; cursor: pointer; }
+      button:disabled { opacity: .6; cursor: not-allowed; }
+      .muted { color: var(--muted); font-size: .9rem; }
+      .answer { white-space: pre-wrap; line-height: 1.6; }
+      .sources { margin-top: 10px; font-size: .9rem; }
+      .chip { display:inline-block; padding: 4px 8px; border-radius: 999px; background: #0f172a; border: 1px solid var(--border); margin-right: 6px; }
+      .loading-dots { display: inline-block; }
+      .loading-dots::after {
+        content: '';
+        animation: dots 1.5s infinite;
+      }
+      @keyframes dots {
+        0%, 20% { content: ''; }
+        40% { content: '.'; }
+        60% { content: '..'; }
+        80%, 100% { content: '...'; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div class="logo"></div>
+        <div>
+          <h1>Ask your documents</h1>
+          <div class="muted">Backed by Vertex RAG + Gemini</div>
+        </div>
+      </header>
+
+      <div class="card">
+        <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
+          <div class="muted">Conversation</div>
+          <button id="newConvBtn" style="background: var(--border); font-size: 0.9rem; padding: 6px 12px;">New Conversation</button>
+        </div>
+        <div id="conversation" class="conversation"></div>
+        <label for="question">Your message</label>
+        <textarea id="question" placeholder="Ask a question or continue the conversation..."></textarea>
+        <div class="row">
+          <button id="askBtn">Send</button>
+          <span id="status" class="muted"></span>
+        </div>
+      </div>
+
+
+
+
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const askBtn = $('askBtn');
+      const newConvBtn = $('newConvBtn');
+      const statusEl = $('status');
+      const conversationEl = $('conversation');
+      const questionEl = $('question');
+
+      let currentConversationId = localStorage.getItem('conversationId');
+
+      function formatTimestamp(timestamp) {
+        return new Date(timestamp * 1000).toLocaleTimeString();
+      }
+
+      function addMessageToUI(role, content, citations = null, timestamp = null) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${role}`;
+
+        const headerDiv = document.createElement('div');
+        headerDiv.className = 'message-header';
+        headerDiv.textContent = role === 'user' ? 'You' : 'Assistant';
+        if (timestamp) {
+          headerDiv.textContent += ` • ${formatTimestamp(timestamp)}`;
+        }
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
+        contentDiv.textContent = content;
+
+        messageDiv.appendChild(headerDiv);
+        messageDiv.appendChild(contentDiv);
+
+        if (citations && citations.length > 0) {
+          const sourcesDiv = document.createElement('div');
+          sourcesDiv.className = 'sources';
+          sourcesDiv.innerHTML = '<div class="muted" style="font-size: 0.8rem;">Sources</div>' +
+            citations.map(uri => `<span class="chip" style="font-size: 0.8rem;">${uri}</span>`).join('');
+          messageDiv.appendChild(sourcesDiv);
+        }
+
+        conversationEl.appendChild(messageDiv);
+        conversationEl.scrollTop = conversationEl.scrollHeight;
+      }
+
+      async function loadConversation() {
+        if (!currentConversationId) return;
+
+        try {
+          const resp = await fetch(`/api/conversation/${currentConversationId}`);
+          if (!resp.ok) {
+            if (resp.status === 404) {
+              // Conversation not found, start new one
+              currentConversationId = null;
+              localStorage.removeItem('conversationId');
+              return;
+            }
+            throw new Error('Failed to load conversation');
+          }
+
+          const data = await resp.json();
+          conversationEl.innerHTML = '';
+
+          data.messages.forEach(msg => {
+            addMessageToUI(msg.role, msg.content, msg.citations, msg.timestamp);
+          });
+        } catch (e) {
+          console.error('Error loading conversation:', e);
+          conversationEl.innerHTML = '<div class="muted">Error loading conversation history</div>';
+        }
+      }
+
+      async function newConversation() {
+        try {
+          const resp = await fetch('/api/conversation/new', { method: 'POST' });
+          const data = await resp.json();
+          currentConversationId = data.conversation_id;
+          localStorage.setItem('conversationId', currentConversationId);
+          conversationEl.innerHTML = '';
+          questionEl.focus();
+        } catch (e) {
+          console.error('Error creating new conversation:', e);
+        }
+      }
+
+      async function ask() {
+        const question = questionEl.value.trim();
+        if (!question) return;
+
+        try {
+          askBtn.disabled = true;
+          statusEl.innerHTML = '<span class="loading-dots"></span> AI is thinking';
+
+          // Add user message to UI immediately
+          addMessageToUI('user', question);
+
+          // Add temporary loading message for AI response
+          const loadingMessageDiv = document.createElement('div');
+          loadingMessageDiv.className = 'message assistant';
+          loadingMessageDiv.id = 'loading-message';
+          loadingMessageDiv.innerHTML = `
+            <div class="message-header">Assistant</div>
+            <div class="message-content"><span class="loading-dots"></span></div>
+          `;
+          conversationEl.appendChild(loadingMessageDiv);
+          conversationEl.scrollTop = conversationEl.scrollHeight;
+
+          const payload = { question };
+          if (currentConversationId) {
+            payload.conversation_id = currentConversationId;
+          }
+
+          const resp = await fetch('/api/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Request failed');
+
+          // Remove loading message
+          const loadingMsg = document.getElementById('loading-message');
+          if (loadingMsg) {
+            loadingMsg.remove();
+          }
+
+          // Store conversation ID if this is a new conversation
+          if (data.conversation_id && data.conversation_id !== currentConversationId) {
+            currentConversationId = data.conversation_id;
+            localStorage.setItem('conversationId', currentConversationId);
+          }
+
+          // Add AI response to UI
+          addMessageToUI('assistant', data.answer || '(no answer)', data.citations);
+
+          // Clear the question input
+          questionEl.value = '';
+
+        } catch (e) {
+          // Remove loading message if it exists
+          const loadingMsg = document.getElementById('loading-message');
+          if (loadingMsg) {
+            loadingMsg.remove();
+          }
+          addMessageToUI('assistant', 'Error: ' + (e.message || e));
+        } finally {
+          statusEl.textContent = '';
+          askBtn.disabled = false;
+        }
+      }
+
+      // Event listeners
+      askBtn.addEventListener('click', ask);
+      newConvBtn.addEventListener('click', newConversation);
+      questionEl.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+          e.preventDefault();
+          ask();
+        }
+      });
+
+      // Initialize
+      if (currentConversationId) {
+        loadConversation();
+      } else {
+        newConversation();
+      }
+    </script>
+  </body>
+  </html>
