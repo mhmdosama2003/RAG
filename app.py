@@ -21,7 +21,7 @@ load_dotenv()
 PROJECT_ID = os.getenv("PROJECT_ID")
 LOCATION = os.getenv("LOCATION", "us-central1")
 # تصحيح: إضافة علامات التنصيص واستخدام نموذج موجود فعلياً
-MODEL = os.getenv("MODEL", "gemini-2.5-flash-lite-preview-09-2025") 
+MODEL = os.getenv("MODEL", "gemini-1.5-flash") 
 DATA_STORE_ID = os.getenv("DATA_STORE_ID")
 
 # 2. تهيئة Vertex AI
