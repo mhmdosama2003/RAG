@@ -66,7 +66,7 @@ load_dotenv()
 
 PROJECT_ID = os.getenv("PROJECT_ID")
 LOCATION = os.getenv("LOCATION", "us-central1")
-MODEL = os.getenv("MODEL", "gemini-1.5-pro-002")
+MODEL=gemini-2.5-flash-lite-preview-09-2025
 
 # Retrieval configuration (choose one)
 RAG_CORPUS = os.getenv("RAG_CORPUS")  # full resource name
