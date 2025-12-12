@@ -4,3 +4,4 @@ google-cloud-aiplatform==1.70.0
 vertexai 
 requests
 google-auth
+gunicorn
